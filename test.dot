@@ -1,0 +1,35 @@
+digraph parse_tree
+{
+  x0x55f761a706a0 [ label="ROOT" ]
+  x0x55f761a706a0 -> { x0x55f761a74ec0 }
+  x0x55f761a74ec0 [ label="AddExpr\n\"6 + a - b * 3 + {\\n\\ta = 8;\\n\\tc = 3;\\n\\ta - c\\n} \\n\\n/*\\nvoid main {\\n\\ta = 4 * (7 + b - 3);\\n\\ta\\n}\\n*/\\n\"" ]
+  x0x55f761a74ec0 -> { x0x55f761a75100, x0x55f761a75580 }
+  x0x55f761a75100 [ label="NumberLiteral\n\"6\"" ]
+  x0x55f761a75580 [ label="AddExpr\n\" a - b * 3 + {\\n\\ta = 8;\\n\\tc = 3;\\n\\ta - c\\n} \\n\\n/*\\nvoid main {\\n\\ta = 4 * (7 + b - 3);\\n\\ta\\n}\\n*/\\n\"" ]
+  x0x55f761a75580 -> { x0x55f761a75070, x0x55f761a75c30 }
+  x0x55f761a75070 [ label="SubExpr\n\"a - b * 3 \"" ]
+  x0x55f761a75070 -> { x0x55f761a759f0, x0x55f761a752b0 }
+  x0x55f761a759f0 [ label="Identifier\n\"a\"" ]
+  x0x55f761a752b0 [ label="MultExpr\n\" b * 3 \"" ]
+  x0x55f761a752b0 -> { x0x55f761a74fe0, x0x55f761a75840 }
+  x0x55f761a74fe0 [ label="Identifier\n\"b\"" ]
+  x0x55f761a75840 [ label="NumberLiteral\n\"3\"" ]
+  x0x55f761a75c30 [ label="CodeBlock\n\"{\\n\\ta = 8;\\n\\tc = 3;\\n\\ta - c\\n} \\n\\n/*\\nvoid main {\\n\\ta = 4 * (7 + b - 3);\\n\\ta\\n}\\n*/\\n\"" ]
+  x0x55f761a75c30 -> { x0x55f761a75f90, x0x55f761a76d70 }
+  x0x55f761a75f90 [ label="CodeBlockStatements\n\"a = 8;\\n\\tc = 3;\\n\\t\"" ]
+  x0x55f761a75f90 -> { x0x55f761a75cc0, x0x55f761a76590 }
+  x0x55f761a75cc0 [ label="Assign\n\"a = 8\"" ]
+  x0x55f761a75cc0 -> { x0x55f761a76ce0, x0x55f761a767d0 }
+  x0x55f761a76ce0 [ label="Identifier\n\"a\"" ]
+  x0x55f761a767d0 [ label="NumberLiteral\n\"8\"" ]
+  x0x55f761a76590 [ label="Assign\n\"c = 3\"" ]
+  x0x55f761a76590 -> { x0x55f761a76e90, x0x55f761a76140 }
+  x0x55f761a76e90 [ label="Identifier\n\"c\"" ]
+  x0x55f761a76140 [ label="NumberLiteral\n\"3\"" ]
+  x0x55f761a76d70 [ label="CodeBlockReturn\n\"a - c\\n\"" ]
+  x0x55f761a76d70 -> { x0x55f761a75d50 }
+  x0x55f761a75d50 [ label="SubExpr\n\"a - c\\n\"" ]
+  x0x55f761a75d50 -> { x0x55f761a76b30, x0x55f761a76aa0 }
+  x0x55f761a76b30 [ label="Identifier\n\"a\"" ]
+  x0x55f761a76aa0 [ label="Identifier\n\"c\"" ]
+}
