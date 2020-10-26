@@ -5,8 +5,14 @@
 #include <memory>
 #include <string>
 #include <optional>
+#include <cstdint>
 
 namespace ast {
+
+using i32 = std::int32_t;
+using u32 = std::uint32_t;
+using f32 = float;
+using f64 = double;
 
 struct Identifier;
 struct Function;
@@ -23,7 +29,35 @@ struct Identifier {
 };
 
 struct Type {
-	Identifier ident;
+	// Identifier ident;
+};
+
+struct BuiltinType : Type {
+	enum class Type {
+		eVoid,
+		f32,
+		f64,
+		i32,
+		u32,
+		eBool,
+
+		count
+	};
+
+	Type type;
+	// for vectors & matrices
+	unsigned rows {1};
+	unsigned cols {1};
+
+	// Builtin types
+	static const ast::BuiltinType& voidType();
+	static const ast::BuiltinType& f32Type();
+	static const ast::BuiltinType& f64Type();
+	static const ast::BuiltinType& i32Type();
+	static const ast::BuiltinType& u32Type();
+	static const ast::BuiltinType& boolType();
+	static const ast::BuiltinType& vecType(Type type, unsigned rows);
+	static const ast::BuiltinType& matType(Type type, unsigned rows, unsigned cols);
 };
 
 struct EnumValue {
@@ -56,7 +90,7 @@ struct Node {
 };
 
 struct Expression : Node {
-	virtual Type* type() const = 0;
+	virtual const Type& type() const = 0;
 };
 
 template<typename Base, typename Derived>
@@ -71,18 +105,37 @@ struct VariableDeclaration {
 };
 
 struct IdentifierExpression : DeriveVisitor<Expression, IdentifierExpression> {
-	VariableDeclaration* decl;
+	const VariableDeclaration* decl;
 
-	Type* type() const override { return decl->type; }
+	const Type& type() const override { return *decl->type; }
 	std::string print() const override { return decl->name.name; }
 };
 
-struct NumberLiteral : DeriveVisitor<Expression, NumberLiteral> {
-	Type* ptype;
-	long double number;
+template<typename T>
+constexpr const BuiltinType& builtinType() {
+	if constexpr(std::is_same_v<T, i32>) {
+		return BuiltinType::i32Type();
+	} else if constexpr(std::is_same_v<T, bool>) {
+		return BuiltinType::boolType();
+	} else if constexpr(std::is_same_v<T, u32>) {
+		return BuiltinType::u32Type();
+	} else if constexpr(std::is_same_v<T, f32>) {
+		return BuiltinType::f32Type();
+	} else if constexpr(std::is_same_v<T, f64>) {
+		return BuiltinType::f64Type();
+	}
 
-	Type* type() const override { return ptype; }
-	std::string print() const override { return std::to_string(number); }
+	// constexpr error landing here
+}
+
+struct Literal : DeriveVisitor<Expression, NumberLiteral> {};
+
+template<typename T>
+struct LiteralImpl : DeriveVisitor<Literal, NumberLiteral> {
+	T value;
+
+	const Type& type() const override { return builtinType<T>(); }
+	std::string print() const override { return std::to_string(value); }
 };
 
 struct Statement : Node {
@@ -105,17 +158,16 @@ struct AssignStatement : DeriveVisitor<Statement, AssignStatement> {
 };
 
 struct CodeBlock : DeriveVisitor<Expression, CodeBlock> {
-	CodeBlock* parent; // might be null
+	CodeBlock* parent {}; // might be null
 	std::vector<std::unique_ptr<Statement>> statements;
 	std::unique_ptr<Expression> ret; // optional
 
-	Type* type() const override {
+	const Type& type() const override {
 		if(ret) {
 			return ret->type();
 		}
 
-		// TODO: return void
-		return nullptr;
+		return BuiltinType::voidType();
 	}
 
 	std::string print() const override {
@@ -137,17 +189,50 @@ struct CodeBlock : DeriveVisitor<Expression, CodeBlock> {
 
 struct Module {
 	std::vector<std::unique_ptr<Function>> functions;
+	std::vector<std::unique_ptr<Type>> types;
 };
 
-struct Function {
+// Function or builtin function
+struct Callable {
+	// If this Callable is callable with the given parameters,
+	// returns the type it will return. Otherwise returns nullptr.
+	// TODO: probably a better interface
+	// virtual const Type* typeCheck(nytl::span<const Type*> params) const = 0;
+
+	virtual std::vector<const Type*> parameters() const = 0;
+	virtual const Type& returnType() const = 0;
+	virtual std::string_view name() const = 0;
+};
+
+struct BuiltinFunction : Callable {
+	const Type* retType;
+	std::vector<const Type*> parameters;
+};
+
+struct Function : Callable {
 	struct Parameter {
+		const Type* type {};
 		Identifier ident;
-		Type* type;
 	};
 
-	Identifier name;
+	Identifier ident;
 	std::vector<Parameter> params;
-	CodeBlock code;
+	const Type* retType;
+	std::unique_ptr<CodeBlock> code;
+
+	std::vector<const Type*> parameters() const override {
+		std::vector<const Type*> ret;
+		for(auto& param : params) {
+			ret.push_back(param.type);
+		}
+		return ret;
+	}
+	const Type& returnType() const override {
+		return *retType;
+	}
+	std::string_view name() const override {
+		return ident.name;
+	}
 };
 
 struct ExpressionStatement : DeriveVisitor<Statement, ExpressionStatement> {
@@ -172,7 +257,7 @@ struct IfExpression : DeriveVisitor<Expression, IfExpression> {
 	std::unique_ptr<CodeBlock> elseBranch; // optional
 	Type* ptype;
 
-	Type* type() const override { return ptype; }
+	const Type& type() const override { return *ptype; }
 	std::string print() const override {
 		std::string ret = "if ";
 		ret += ifBranch.condition->print();
@@ -197,13 +282,13 @@ struct IfExpression : DeriveVisitor<Expression, IfExpression> {
 };
 
 struct FunctionCall : DeriveVisitor<Expression, FunctionCall> {
-	Function* func;
+	const Callable* func;
 	std::vector<std::unique_ptr<Expression>> arguments;
 
-	Type* type() const override { return func->code.type(); }
+	const Type& type() const override { return func->returnType(); }
 	std::string print() const override {
 		std::string ret;
-		ret += func->name.name;
+		ret += func->name();
 		ret += "(";
 		for(const auto& arg : arguments) {
 			ret += arg->print();
@@ -232,27 +317,23 @@ struct OpExpression : DeriveVisitor<Expression, OpExpression> {
 		}
 	}
 
-	std::vector<std::unique_ptr<Expression>> children;
+	std::unique_ptr<Expression> left;
+	std::unique_ptr<Expression> right;
 	OpType opType;
 	Type* ptype;
 
-	Type* type() const override { return ptype; }
+	const Type& type() const override { return *ptype; }
 	std::string print() const override {
 		std::string ret;
-		ret += "(";
-		auto first = true;
-		const auto* sop = name(opType);
-		for(const auto& c : children) {
-			if(!first) {
-				ret += " ";
-				ret += sop;
-				ret += " ";
-			}
 
-			ret += c->print();
-			first = false;
-		}
+		ret += "(";
+		ret += left->print();
+		ret += " ";
+		ret += name(opType);
+		ret += " ";
+		ret += right->print();
 		ret += ")";
+
 		return ret;
 	}
 };
@@ -281,7 +362,7 @@ public:
 	virtual void visit(CodeBlock& e) {
 		visit(static_cast<Expression&>(e));
 	}
-	virtual void visit(NumberLiteral& e) {
+	virtual void visit(Literal& e) {
 		visit(static_cast<Expression&>(e));
 	}
 	virtual void visit(IdentifierExpression& e) {
@@ -293,22 +374,5 @@ template<typename Base, typename Derived>
 void ast::DeriveVisitor<Base, Derived>::visit(Visitor& v) {
 	v.visit(static_cast<Derived&>(*this));
 }
-
-
-/*
-// TODO
-// parser state
-struct State {
-	std::vector<std::unique_ptr<Function>> functions;
-	std::vector<std::unique_ptr<VariableDeclaration>> globalVars;
-
-	std::unique_ptr<Function> function;
-	std::unique_ptr<CodeBlock> codeBlock;
-	std::unique_ptr<Statement> statement;
-	std::unique_ptr<Expression> expression;
-
-	std::vector<VariableDeclaration*> localVars;
-};
-*/
 
 } // namespace ast

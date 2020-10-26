@@ -39,6 +39,14 @@ struct FoldDiscard : pegtl::parse_tree::apply<Fold> {
 	}
 };
 
+struct ConsumeFirst : pegtl::parse_tree::apply<ConsumeFirst> {
+	template<typename Node, typename... States>
+	static void transform(std::unique_ptr<Node>& n, States&&...) {
+		auto nc = std::move(n->children[0]->children);
+		n->children = std::move(nc);
+	}
+};
+
 struct DiscardChildren : pegtl::parse_tree::apply<DiscardChildren> {
 	template<typename Node, typename... States>
 	static void transform(std::unique_ptr<Node>& n, States&&...) {
@@ -76,142 +84,80 @@ struct Keep : pegtl::parse_tree::apply<Keep> {
 
 template<typename Rule> struct selector : FoldDiscard {};
 
-template<> struct selector<Identifier> : DiscardChildren {};
-template<> struct selector<NumberLiteral> : DiscardChildren {};
+template<> struct selector<syn::Identifier> : DiscardChildren {};
 
-// template<> struct selector<AddExpr> : ExprSelector {};
-// template<> struct selector<MultExpr> : ExprSelector {};
+template<> struct selector<syn::CodeBlock> : ConsumeFirst {};
+template<> struct selector<syn::CodeBlockStatements> : Keep {};
+template<> struct selector<syn::CodeBlockReturn> : Keep {};
+template<> struct selector<syn::Branch> : Keep {};
+template<> struct selector<syn::ElseIfBranch> : Keep {};
 
-// template<> struct selector<SubPart> : Keep {};
-// template<> struct selector<DivPart> : Keep {};
+template<> struct selector<syn::IfExpr> : ConsumeFirst {};
+template<> struct selector<syn::ElseIfs> : Keep {};
 
-template<> struct selector<CodeBlock> : Keep {};
-template<> struct selector<CodeBlockStatements> : Keep {};
-template<> struct selector<CodeBlockReturn> : Keep {};
-template<> struct selector<Branch> : Keep {};
-template<> struct selector<ElseIfBranch> : Keep {};
+template<> struct selector<syn::ExprStatement> : Keep {};
 
-template<> struct selector<IfExpr> : Keep {};
-template<> struct selector<ElseIfs> : Keep {};
+template<> struct selector<syn::TrueLiteral> : Keep {};
+template<> struct selector<syn::FalseLiteral> : Keep {};
+template<> struct selector<syn::SuffixI32> : Keep {};
+template<> struct selector<syn::SuffixU32> : Keep {};
+template<> struct selector<syn::SuffixF64> : Keep {};
+template<> struct selector<syn::SuffixF32OrEmpty> : Keep {};
+template<> struct selector<syn::SuffixedNumberLiteral> : Keep {};
+template<> struct selector<syn::FNumber> : Keep {};
+template<> struct selector<syn::DNumber> : Keep {};
 
-template<> struct selector<ExprStatement> : Keep {};
+template<> struct selector<syn::FunctionParameterList> : Keep {};
+template<> struct selector<syn::FunctionArgsList> : Keep {};
 
-template<> struct selector<Seps> : Discard {};
-template<> struct selector<Plus> : Discard {};
-template<> struct selector<Minus> : Discard {};
-template<> struct selector<Mult> : Discard {};
-template<> struct selector<Divide> : Discard {};
+template<> struct selector<syn::Seps> : Discard {};
+template<> struct selector<syn::Plus> : Discard {};
+template<> struct selector<syn::Minus> : Discard {};
+template<> struct selector<syn::Mult> : Discard {};
+template<> struct selector<syn::Divide> : Discard {};
 template<char c> struct selector<pegtl::one<c>> : Discard {};
 
-class TreeBuilder {
-	using ParseTreeNode = tao::pegtl::parse_tree::node;
+// errors
+template<typename> inline constexpr const char* error_message = nullptr;
+template<> inline constexpr const char* error_message<syn::AddRest> = "Expected expression after '+'";
+template<> inline constexpr const char* error_message<syn::MultRest> = "Expected expression after '*'";
+template<> inline constexpr const char* error_message<syn::DivRest> = "Expected expression after '/'";
+template<> inline constexpr const char* error_message<syn::SubRest> = "Expected expression after '-'";
+template<> inline constexpr const char* error_message<syn::ParanthExprClose> = "Closing ')' after expression is missing";
+template<> inline constexpr const char* error_message<syn::CodeBlockClose> = "Closing '}' after code block is missing";
+template<> inline constexpr const char* error_message<syn::Eof> = "Expected end of file";
+template<> inline constexpr const char* error_message<syn::Branch> = "Expected branch (condition and codeblock)";
+template<> inline constexpr const char* error_message<syn::ElseCodeBlock> = "Expected codeblock after 'else'";
+template<> inline constexpr const char* error_message<syn::Expr> = "Expected expression";
+template<> inline constexpr const char* error_message<syn::CodeBlockStatements> = "Expected statement"; // can't fail I guess?
+template<> inline constexpr const char* error_message<syn::OptCodeBlockReturn> = "Expected (optional) code block return"; // can't fail I guess?
+// TODO: fix for comments?
+template<> inline constexpr const char* error_message<syn::Seps> = "Unexpected Error"; // can't fail I guess?
 
-	struct {
-		ast::CodeBlock* codeBlock {};
-		ast::Function* function {};
-	} current_;
+struct error {
+	template<typename Rule> static constexpr auto message = error_message<Rule>;
 
-	struct {
-		std::vector<std::vector<ast::VariableDeclaration>> vars;
-		std::vector<std::vector<ast::Type*>> types;
-	} decls_;
-
-	ast::Module module_;
-
-	std::unique_ptr<ast::Statement> parseStatement(const ParseTreeNode& node) {
-		if(node.is_type<ExprStatement>()) {
-			assert(node.children.size() == 1);
-			auto ret = std::make_unique<ast::ExpressionStatement>();
-			ret->expr = parseExpr(*node.children[0]);
-			return ret;
-		} else if(node.is_type<Assign>()) {
-			assert(node.children.size() == 2);
-			auto ret = std::make_unique<ast::AssignStatement>();
-			ret->left = parseExpr(*node.children[0]);
-			ret->right = parseExpr(*node.children[1]);
-			return ret;
-		} else if(node.is_type<IfExpr>()) {
-			auto ret = std::make_unique<ast::ExpressionStatement>();
-			ret->expr = std::make_unique<ast::IfExpression>(parseIfExpr(node));
-			return ret;
-		}
-
-		assert(!"Invalid statement type");
-	}
-
-	std::unique_ptr<ast::CodeBlock> parseCodeBlock(const ParseTreeNode& node) {
-		assert(node.children.size() >= 1 & node.children.size() <= 2);
-		assert(node.is_type<CodeBlock>());
-
-		auto ret = std::make_unique<ast::CodeBlock>();
-		auto& statements = *node.children[0];
-		assert(statements.is_type<CodeBlockStatements>());
-		for(auto& statement : statements.children) {
-			ret->statements.emplace_back(parseStatement(*statement));
-		}
-
-		if(node.children.size() > 1) {
-			auto& retexpr = node.children[1];
-			ret->ret = parseExpr(*retexpr);
-		}
-
-		return ret;
-	}
-
-	std::unique_ptr<ast::Expression> parseOpExpr(const ParseTreeNode& node,
-			ast::OpExpression::OpType op) {
-		assert(node.children.size() >= 2);
-		auto ret = std::make_unique<ast::OpExpression>();
-		ret->opType = op;
-		for(auto& child : node.children) {
-			ret->children.push_back(parseExpr(*child));
-		}
-
-		return ret;
-	}
-
-	std::unique_ptr<ast::Expression> parseExpr(const ParseTreeNode& node) {
-		if(node.is_type<IfExpr>()) {
-			return std::make_unique<ast::IfExpression>(parseIfExpr(node));
-		} else if(node.is_type<AddExpr>()) {
-			return parseOpExpr(node, ast::OpExpression::OpType::add);
-		} else if(node.is_type<MultExpr>()) {
-			return parseOpExpr(node, ast::OpExpression::OpType::mult);
-		}
-
-		// TODO
-
-		// unkown expression type!
-		assert(!"Invalid expression type");
-	}
-
-	ast::IfExpression::Branch parseBranch(const ParseTreeNode& node) {
-		ast::IfExpression::Branch ret;
-		assert(node.children.size() == 2);
-		assert(node.is_type<Branch>());
-		ret.condition = parseExpr(*node.children[0]);
-		ret.code = parseCodeBlock(*node.children[1]);
-		return ret;
-	}
-
-	ast::IfExpression parseIfExpr(const ParseTreeNode& node) {
-		ast::IfExpression ret;
-		assert(node.children.size() >= 2 && node.children.size() <= 3);
-		assert(node.is_type<IfExpr>());
-
-		ret.ifBranch = parseBranch(*node.children[0]);
-		for(auto& elseif : node.children[1]->children) {
-			ret.elsifBranches.push_back(parseBranch(*elseif));
-		}
-
-		if(node.children.size() == 3) {
-			ret.elseBranch = parseCodeBlock(*node.children[2]);
-		}
-
-		return ret;
-	}
+	// template<typename Rule> static constexpr auto message =
+	// 	error_message<Rule> ? error_message<Rule> : tao::demangle<Rule>().data();
 };
 
+template<typename Rule> using control = tao::pegtl::must_if<error>::control<Rule>;
+
+std::string readFile(std::string_view filename) {
+	auto openmode = std::ios::openmode(std::ios::ate);
+
+	std::ifstream ifs(std::string{filename}, openmode);
+	ifs.exceptions(std::ostream::failbit | std::ostream::badbit);
+
+	auto size = ifs.tellg();
+	ifs.seekg(0, std::ios::beg);
+
+	std::string buffer;
+	buffer.resize(size);
+	ifs.read(buffer.data(), size);
+
+	return buffer;
+}
 
 int main(int argc, char** argv) {
 	if(argc < 2) {
@@ -219,17 +165,49 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
-	if(pegtl::analyze<Statement>() != 0) {
+	if(pegtl::analyze<syn::Grammar>() != 0) {
 		std::printf("cycles without progress detected!\n");
 		return 2;
    }
 
-	pegtl::file_input in(argv[1]);
-	auto root = tao::pegtl::parse_tree::parse<pegtl::must<Expr, pegtl::eof>, selector>(in);
-	if(root) {
+	// pegtl::file_input in(argv[1]);
+
+	auto file = readFile(argv[1]);
+	pegtl::memory_input in(file, argv[1]);
+	// pegtl::standard_trace<syn::Grammar>(in);
+
+	using Grammar = pegtl::must<syn::Expr, syn::Eof>;
+	try {
+		auto root = tao::pegtl::parse_tree::parse<Grammar, selector, pegtl::nothing, control>(in);
 		auto of = std::ofstream("test.dot");
 		pegtl::parse_tree::print_dot(of, *root);
-	} else {
-		std::printf("Parsing failed\n");
+	} catch(const pegtl::parse_error& error) {
+		auto& pos = error.positions()[0];
+		auto msg = error.message();
+		std::cout << pos.source << ":" << pos.line << ":" << pos.column << ": " << msg << "\n";
+
+		/*
+		auto src = std::string_view(file);
+		auto start = std::max(int(pos.byte) - int(pos.column), 0);
+		src = src.substr(start);
+
+		auto nl = src.find('\n');
+		if(nl != src.npos) {
+			src = src.substr(0, nl);
+		}
+		*/
+
+		// TODO: make it work with tabs
+		auto line = in.line_at(pos);
+		auto tabCount = std::count(line.begin(), line.end(), '\t');
+		std::cout << line << "\n";
+
+		// hard to say what tab size is... eh. Maybe just replace it?
+		auto col = pos.column + tabCount * (4 - 1);
+		for(auto i = 1u; i < col; ++i) {
+			std::cout << " ";
+		}
+
+		std::cout << "^\n";
 	}
 }
