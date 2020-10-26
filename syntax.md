@@ -1,3 +1,5 @@
+# Syntax Ideas
+
 C++ like
 ```
 struct A {
