@@ -31,7 +31,7 @@ struct Minus : pegtl::one<'-'> {};
 struct Mult : pegtl::one<'*'> {};
 struct Divide : pegtl::one<'/'> {};
 struct Comma : pegtl::one<','> {};
-struct Point : pegtl::one<'.'> {};
+struct Dot : pegtl::one<'.'> {};
 struct Semicolon : pegtl::one<';'> {};
 
 
@@ -71,7 +71,7 @@ struct OptNumberLiteralSuffix : pegtl::sor<
 
 // TODO: support 1.0e5 notation
 struct Number : pegtl::plus<pegtl::digit> {};
-struct FNumber : pegtl::seq<Number, Point, Number> {};
+struct FNumber : pegtl::seq<Number, Dot, Number> {};
 struct DNumber : pegtl::seq<Number> {};
 
 struct SuffixedNumberLiteral : pegtl::seq<
@@ -197,13 +197,13 @@ struct UsingTypeDecl : Interleaved<Seps,
 struct IdentifierExpr : pegtl::seq<Identifier> {};
 struct AtomExpr : pegtl::sor<Literal, IdentifierExpr> {};
 
-struct FunctionArgsList : pegtl::list_tail<Identifier, Comma, Separator> {};
-struct FunctionCall : Interleaved<Seps,
-	Identifier,
-	pegtl::one<'('>,
-	FunctionArgsList,
-	pegtl::one<')'>
-> {};
+// struct CallableExpr;
+// struct FunctionCall : Interleaved<Seps,
+// 	CallableExpr,
+// 	pegtl::one<'('>,
+// 	FunctionArgsList,
+// 	pegtl::one<')'>
+// > {};
 struct ParanthExprClose : pegtl::one<')'> {};
 struct ParanthExpr : pegtl::if_must<pegtl::one<'('>,
 	Seps,
@@ -211,15 +211,60 @@ struct ParanthExpr : pegtl::if_must<pegtl::one<'('>,
 	Seps,
 	ParanthExprClose
 > {};
-struct NonUnaryMinusExpr : pegtl::sor<
+
+// Order here is extremely important.
+// The ones that can be discarded quickly should be first.
+// Recursive calls to Expr should be last.
+struct Expr0 : pegtl::sor<
 	ParanthExpr,
-	AtomExpr,
+	CodeBlock,
+	AtomExpr
+> {};
+
+struct FunctionArgsList : pegtl::opt<pegtl::list_tail<Identifier, Comma, Separator>> {};
+struct FunctionArgsListClose : pegtl::one<')'> {};
+struct FunctionArgsListP : pegtl::if_must<
+	pegtl::one<'('>,
+	Seps,
+	FunctionArgsList,
+	Seps,
+	FunctionArgsListClose
+> {};
+struct FunctionArgLists : pegtl::star<FunctionArgsListP> {};
+struct FunctionCall : Interleaved<Seps,
+	Expr0,
+	FunctionArgLists
+> {};
+
+struct MemberAccessor : Interleaved<Seps,
+	Identifier,
+	FunctionArgLists
+> {};
+struct MemberAccessors : pegtl::star<pegtl::if_must<Dot, Seps, MemberAccessor>> {};
+struct MemberAccessChain : Interleaved<Seps,
 	FunctionCall,
-	CodeBlock> {};
+	MemberAccessors
+> {};
+
+// struct FunctionChain : Interleaved<Seps,
+// 	Expr0,
+// 	pegtl::star<FunctionArgsListP>
+// > {};
+
+// struct MemberAccessor : FunctionChain {};
+// struct MemberAccess : pegtl::if_must<Dot,
+// 	Seps,
+// 	MemberAccessor
+// > {};
+// struct MemberAccessChain : Interleaved<Seps,
+// 	FunctionChain,
+// 	pegtl::star<MemberAccess>
+// > {};
 
 struct PrimaryExpr : pegtl::sor<
-	Interleaved<Seps, pegtl::one<'-'>, NonUnaryMinusExpr>,
-	NonUnaryMinusExpr> {};
+	// TODO: make if_must?
+	Interleaved<Seps, pegtl::one<'-'>, MemberAccessChain>,
+	MemberAccessChain> {};
 
 template<typename R, typename... S>
 struct OptIfMust : pegtl::if_then_else<R, pegtl::must<S...>, pegtl::success> {};
@@ -234,15 +279,20 @@ struct DivExpr;
 // struct SubRest : pegtl::opt<Interleaved<Seps, Minus, MultExpr>> {};
 // struct MultRest : pegtl::opt<Interleaved<Seps, Mult, DivExpr>> {};
 
-struct AddRest : pegtl::seq<SubExpr> {};
-struct DivRest : pegtl::seq<PrimaryExpr> {};
-struct SubRest : pegtl::seq<MultExpr> {};
-struct MultRest : pegtl::seq<DivExpr> {};
+struct AddPart : pegtl::seq<SubExpr> {};
+struct DivPart : pegtl::seq<PrimaryExpr> {};
+struct SubPart : pegtl::seq<MultExpr> {};
+struct MultPart : pegtl::seq<DivExpr> {};
 
-struct DivExpr : Interleaved<Seps, PrimaryExpr, OptIfMust<Divide, Seps, DivRest>> {};
-struct MultExpr : Interleaved<Seps, DivExpr, OptIfMust<Mult, Seps, MultRest>> {};
-struct SubExpr : Interleaved<Seps, MultExpr, OptIfMust<Minus, Seps, SubRest>> {};
-struct AddExpr : Interleaved<Seps, SubExpr, OptIfMust<Plus, Seps, AddRest>> {};
+struct AddRest : pegtl::star<pegtl::if_must<Plus, Seps, SubPart, Seps>> {};
+struct DivRest : pegtl::star<pegtl::if_must<Divide, Seps, DivPart, Seps>> {};
+struct SubRest : pegtl::star<pegtl::if_must<Minus, Seps, MultPart, Seps>> {};
+struct MultRest : pegtl::star<pegtl::if_must<Mult, Seps, DivPart, Seps>> {};
+
+struct DivExpr : Interleaved<Seps, PrimaryExpr, DivRest> {};
+struct MultExpr : Interleaved<Seps, DivExpr, MultRest> {};
+struct SubExpr : Interleaved<Seps, MultExpr, SubRest> {};
+struct AddExpr : Interleaved<Seps, SubExpr, AddRest> {};
 
 struct Expr : pegtl::sor<IfExpr, AddExpr> {};
 
