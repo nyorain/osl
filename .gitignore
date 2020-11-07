@@ -1,5 +1,6 @@
 a.out
 tao/
+build/
 PEGTL
 stash
 test.dot

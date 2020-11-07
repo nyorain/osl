@@ -1,6 +1,7 @@
 #pragma once
 
 #include "syntax.hpp"
+#include "span.hpp"
 #include "ast.hpp"
 #include "tao/pegtl/contrib/parse_tree.hpp"
 
@@ -9,6 +10,7 @@ namespace builder {
 class TreeBuilder {
 	using ParseTreeNode = tao::pegtl::parse_tree::node;
 	using VariableMap = std::unordered_map<std::string_view, ast::VariableDeclaration*>;
+	using TypeMap = std::unordered_map<std::string_view, std::unique_ptr<ast::Type>>;
 
 	struct {
 		ast::CodeBlock* codeBlock {};
@@ -17,7 +19,7 @@ class TreeBuilder {
 
 	struct {
 		std::vector<VariableMap> vars;
-		std::vector<std::vector<ast::Type*>> types;
+		std::vector<TypeMap> types;
 	} decls_;
 
 	ast::Module module_;
@@ -64,12 +66,20 @@ class TreeBuilder {
 
 	std::unique_ptr<ast::Expression> parseOpExpr(const ParseTreeNode& node,
 			ast::OpExpression::OpType op) {
-		assert(node.children.size() == 2);
+		assert(node.children.size() >= 2);
 		auto ret = std::make_unique<ast::OpExpression>();
 		ret->opType = op;
-		ret->left = parseExpr(*node.children[0]);
-		ret->right = parseExpr(*node.children[0]);
+		for(auto& child : node.children) {
+			ret->children.emplace_back(parseExpr(*child));
+		}
 		return ret;
+	}
+
+	ast::Identifier parseIdentifier(const ParseTreeNode& node) {
+		assert(node.children.empty());
+		assert(node.is_type<syn::Identifier>());
+		auto name = node.string_view();
+		return {std::string(name)};
 	}
 
 	std::unique_ptr<ast::Expression> parseExpr(const ParseTreeNode& node) {
@@ -118,6 +128,7 @@ class TreeBuilder {
 				assert(!"Invalid suffix");
 			}
 		} else if(node.is_type<syn::IdentifierExpr>()) {
+			// TODO: update for Colon syntax
 			auto name = node.string_view();
 			auto& vars = decls_.vars.back();
 			auto it = vars.find(name);
@@ -130,30 +141,56 @@ class TreeBuilder {
 			return ret;
 		} else if(node.is_type<syn::CodeBlock>()) {
 			return parseCodeBlock(node);
-		} else if(node.is_type<syn::FunctionCall>()) {
-			auto ret = std::make_unique<ast::FunctionCall>();
-			assert(node.children.size() == 2);
+		} else if(node.is_type<syn::MemberFunctionChain>()) {
+			assert(node.children.size() >= 1);
+			auto accessed = parseExpr(*node.children[0]);
+			auto children = std::span(node.children).subspan(1);
 
-			std::vector<const ast::Type*> argTypes;
-			for(auto& param : node.children[1]->children) {
-				auto& p = ret->arguments.emplace_back(parseExpr(*param));
-				argTypes.push_back(&p->type());
+			for(auto& link : children) {
+				if(link->is_type<syn::MemberFunctionChainAccess>()) {
+					assert(link->children.size() == 1);
+					auto res = std::make_unique<ast::MemberAccess>();
+					res->accessed = std::move(accessed);
+
+					auto ident = parseIdentifier(*link->children[0]);
+
+					// TODO: modify for member functions
+					auto& type = res->accessed->type();
+					assert(type.category == ast::Type::Category::eStruct);
+					auto& sType = static_cast<const ast::StructType&>(type);
+					auto it = std::find_if(sType.members.begin(), sType.members.end(),
+						[&](auto& member) { return member.name == ident.name; });
+					if(it == sType.members.end()) {
+						assert(!"Struct {} does not have member {}");
+					}
+
+					res->accessor = &*it;
+					accessed = std::move(res);
+				} else if(link->is_type<syn::MemberFunctionChainCall>()) {
+					assert(link->children.size() == 1);
+					assert(link->children[0]->is_type<syn::FunctionArgsListP>());
+					auto call = std::make_unique<ast::FunctionCall>();
+					for(auto& arg : link->children[0]->children) {
+						call->arguments.emplace_back(parseExpr(*arg));
+					}
+
+					call->called = findCallable(*accessed, call->arguments);
+					accessed = std::move(call);
+				}
 			}
 
-			auto cname = node.children[0]->string_view();
-			ret->func = findCallable(cname, argTypes);
-			assert(ret->func);
-
-			return ret;
+			return accessed;
 		}
 
 		// unkown expression type!
 		assert(!"Invalid expression type");
 	}
 
-	const ast::Callable* findCallable(std::string_view name,
-			const std::vector<const ast::Type*>& params) {
+	const ast::Callable* findCallable(const ast::Expression& expr,
+			std::span<const std::unique_ptr<ast::Expression>> params) {
 		// TODO
+		assert(!"TODO");
+		return nullptr;
 	}
 
 	ast::IfExpression::Branch parseBranch(const ParseTreeNode& node) {
@@ -182,7 +219,7 @@ class TreeBuilder {
 		return ret;
 	}
 
-	const ast::Type& parseType(const ParseTreeNode& node) {
+	const ast::Type& findType(const ParseTreeNode& node) {
 		// TODO
 	}
 
@@ -195,7 +232,7 @@ class TreeBuilder {
 
 		auto func = std::make_unique<ast::Function>();
 
-		func->retType = &parseType(*node.children[0]);
+		func->retType = &findType(*node.children[0]);
 		func->ident.name = node.children[1]->string();
 		func->code = parseCodeBlock(*node.children[3]);
 
@@ -205,7 +242,7 @@ class TreeBuilder {
 			assert(child->children[1]->is_type<syn::Identifier>());
 
 			auto& param = func->params.emplace_back();
-			param.type = &parseType(*child->children[0]);
+			param.type = &findType(*child->children[0]);
 			param.ident.name = child->children[1]->string();
 		}
 
@@ -213,6 +250,29 @@ class TreeBuilder {
 	}
 
 	void addStruct(const ParseTreeNode& node) {
+		auto res = std::make_unique<ast::StructType>();
+		res->category = ast::Type::Category::eStruct;
+
+		assert(!node.children.empty());
+		res->name = parseIdentifier(*node.children[0]).name;
+		auto children = std::span(node.children).subspan(1);
+
+		for(auto& cmember : children) {
+			assert(cmember->is_type<syn::StructMember>());
+			assert(cmember->children.size() == 2 || cmember->children.size() == 3);
+
+			auto& member = res->members.emplace_back();
+			member.type = &findType(*cmember->children[0]);
+			member.name = parseIdentifier(*cmember->children[1]);
+
+			if(cmember->children.size() == 3) {
+				member.init = parseExpr(*cmember->children[2]);
+			}
+		}
+
+		auto nv = std::string_view(res->name);
+		auto [_, success] = decls_.types.back().emplace(nv, std::move(res));
+		assert(success && "Type with name {} already known");
 	}
 
 	void addEnum(const ParseTreeNode& node) {

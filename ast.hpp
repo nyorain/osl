@@ -29,7 +29,14 @@ struct Identifier {
 };
 
 struct Type {
-	// Identifier ident;
+	enum class Category {
+		primitive,
+		eStruct,
+		eEnum,
+		// function,
+	};
+
+	Category category;
 };
 
 struct BuiltinType : Type {
@@ -60,6 +67,13 @@ struct BuiltinType : Type {
 	static const ast::BuiltinType& matType(Type type, unsigned rows, unsigned cols);
 };
 
+/*
+struct FunctionType : Type {
+	const Type* returnType;
+	std::vector<const Type*> argumentTypes;
+};
+*/
+
 struct EnumValue {
 	Identifier name;
 	std::vector<Type*> types;
@@ -70,13 +84,14 @@ struct EnumType : Type {
 };
 
 struct StructMember {
-	Type* type;
+	const Type* type;
 	Identifier name;
 	std::unique_ptr<Expression> init;
 };
 
 struct StructType : Type {
 	std::vector<StructMember> members;
+	std::string name;
 };
 
 struct Parameter {
@@ -87,6 +102,7 @@ struct Parameter {
 struct Node {
 	virtual void visit(Visitor&) = 0;
 	virtual std::string print() const = 0;
+	virtual ~Node() = default;
 };
 
 struct Expression : Node {
@@ -202,12 +218,15 @@ struct Callable {
 	virtual std::vector<const Type*> parameters() const = 0;
 	virtual const Type& returnType() const = 0;
 	virtual std::string_view name() const = 0;
+	virtual ~Callable() = default;
 };
 
+/*
 struct BuiltinFunction : Callable {
 	const Type* retType;
 	std::vector<const Type*> parameters;
 };
+*/
 
 struct Function : Callable {
 	struct Parameter {
@@ -217,6 +236,8 @@ struct Function : Callable {
 
 	Identifier ident;
 	std::vector<Parameter> params;
+	// TODO: use that instead to bind them
+	// std::vector<VariableDeclaration> params;
 	const Type* retType;
 	std::unique_ptr<CodeBlock> code;
 
@@ -281,14 +302,23 @@ struct IfExpression : DeriveVisitor<Expression, IfExpression> {
 	}
 };
 
+struct MemberAccess : DeriveVisitor<Expression, MemberAccess> {
+	std::unique_ptr<Expression> accessed;
+	const StructMember* accessor;
+
+	const Type& type() const override {
+		return *accessor->type;
+	}
+};
+
 struct FunctionCall : DeriveVisitor<Expression, FunctionCall> {
-	const Callable* func;
+	const Callable* called;
 	std::vector<std::unique_ptr<Expression>> arguments;
 
-	const Type& type() const override { return func->returnType(); }
+	const Type& type() const override { return called->returnType(); }
 	std::string print() const override {
 		std::string ret;
-		ret += func->name();
+		ret += called->name();
 		ret += "(";
 		for(const auto& arg : arguments) {
 			ret += arg->print();
@@ -317,29 +347,35 @@ struct OpExpression : DeriveVisitor<Expression, OpExpression> {
 		}
 	}
 
-	std::unique_ptr<Expression> left;
-	std::unique_ptr<Expression> right;
+	std::vector<std::unique_ptr<Expression>> children;
 	OpType opType;
 	Type* ptype;
 
 	const Type& type() const override { return *ptype; }
 	std::string print() const override {
 		std::string ret;
-
 		ret += "(";
-		ret += left->print();
-		ret += " ";
-		ret += name(opType);
-		ret += " ";
-		ret += right->print();
-		ret += ")";
+		auto first = true;
+		const auto* sop = name(opType);
+		for(const auto& c : children) {
+			if(!first) {
+				ret += " ";
+				ret += sop;
+				ret += " ";
+			}
 
+			ret += c->print();
+			first = false;
+		}
+		ret += ")";
 		return ret;
 	}
 };
 
 class Visitor {
 public:
+	virtual ~Visitor() = default;
+
 	virtual void visit(Node&) {}
 	virtual void visit(Statement& s) {
 		visit(static_cast<Node&>(s));
@@ -358,9 +394,18 @@ public:
 	}
 	virtual void visit(FunctionCall& e) {
 		visit(static_cast<Expression&>(e));
+		for(auto& arg : e.arguments) {
+			visit(*arg);
+		}
 	}
 	virtual void visit(CodeBlock& e) {
 		visit(static_cast<Expression&>(e));
+		for(auto& stmt : e.statements) {
+			visit(*stmt);
+		}
+		if(e.ret) {
+			visit(*e.ret);
+		}
 	}
 	virtual void visit(Literal& e) {
 		visit(static_cast<Expression&>(e));

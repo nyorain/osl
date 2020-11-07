@@ -137,3 +137,41 @@ already (making sure a literal can't be the first expression in a member
 access chain) but i feel like the error messages for that should be
 the same as for e.g. `i.a`, where `i` is an integer. And it's easier
 to keep such details/special cases out of the syntax.
+
+---
+
+next try:
+
+```
+MemberFunctionChain ::= Expr0[[.Identifier]*[(Expr*)]*]*
+# or, better:
+MemberFunctionChain ::= Expr0[.Identifier | (Expr*)]*
+
+---
+
+parse(node) {
+	if(node is MemberFunctionChain) {
+		assert(node.children.size() >= 1);
+		auto accessed = parseExpr(*node.children[0]);
+		node.children.erase(node.children.begin());
+
+		for(auto& link : node.children) {
+			if(link is MemberFunctionChainAccess) {
+				assert(link.children.size() == 1);
+				auto res = make_unique<ast::MemberAccess>();
+				res.accessed = std::move(accessed);
+				res.identifier = parseIdentifier(link->children[0]);
+				accessed = std::move(res);
+			} else if(link is MemberFunctionChainCall) {
+				assert(link.children.size() == 1);
+				auto call = make_unique<ast::FunctionCall>();
+				call.called = std::move(accessed);
+				call.args = parseFunctionArgs(*link.children[0]);
+				accessed = std::move(call);
+			}
+		}
+
+		return accessed;
+	}
+}
+```

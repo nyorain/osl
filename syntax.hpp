@@ -33,6 +33,7 @@ struct Divide : pegtl::one<'/'> {};
 struct Comma : pegtl::one<','> {};
 struct Dot : pegtl::one<'.'> {};
 struct Semicolon : pegtl::one<';'> {};
+struct Colon : pegtl::one<':'> {};
 
 
 struct Identifier : pegtl::plus<pegtl::alpha> {};
@@ -194,7 +195,9 @@ struct UsingTypeDecl : Interleaved<Seps,
 > {};
 
 // expression
-struct IdentifierExpr : pegtl::seq<Identifier> {};
+struct IdentifierExpr : pegtl::sor<Identifier,
+	pegtl::star<pegtl::if_must<Colon, Colon, Identifier>>
+> {};
 struct AtomExpr : pegtl::sor<Literal, IdentifierExpr> {};
 
 // struct CallableExpr;
@@ -230,6 +233,8 @@ struct FunctionArgsListP : pegtl::if_must<
 	Seps,
 	FunctionArgsListClose
 > {};
+
+/*
 struct FunctionArgLists : pegtl::star<FunctionArgsListP> {};
 struct FunctionCall : Interleaved<Seps,
 	Expr0,
@@ -245,6 +250,21 @@ struct MemberAccessChain : Interleaved<Seps,
 	FunctionCall,
 	MemberAccessors
 > {};
+*/
+
+struct MemberAccess : Identifier {};
+struct MemberFunctionChainAccess : pegtl::if_must<Dot, Seps, MemberAccess> {};
+struct MemberFunctionChainCall : FunctionArgsListP {};
+struct MemberFunctionChainLinks : pegtl::star<Interleaved<Seps,
+	pegtl::sor<MemberFunctionChainAccess, MemberFunctionChainCall>
+>> {};
+
+struct MemberFunctionChain : Interleaved<Seps,
+	Expr0,
+	MemberFunctionChainLinks
+> {};
+
+
 
 // struct FunctionChain : Interleaved<Seps,
 // 	Expr0,
@@ -263,8 +283,8 @@ struct MemberAccessChain : Interleaved<Seps,
 
 struct PrimaryExpr : pegtl::sor<
 	// TODO: make if_must?
-	Interleaved<Seps, pegtl::one<'-'>, MemberAccessChain>,
-	MemberAccessChain> {};
+	Interleaved<Seps, pegtl::one<'-'>, MemberFunctionChain>,
+	MemberFunctionChain> {};
 
 template<typename R, typename... S>
 struct OptIfMust : pegtl::if_then_else<R, pegtl::must<S...>, pegtl::success> {};

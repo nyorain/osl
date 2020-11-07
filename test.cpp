@@ -92,7 +92,7 @@ struct ChainSelector : pegtl::parse_tree::apply<DiscardChildren> {
 
 struct Keep : pegtl::parse_tree::apply<Keep> {
 	template<typename Node, typename... States>
-	static void transform(std::unique_ptr<Node>& n, States&&...) {
+	static void transform(std::unique_ptr<Node>&, States&&...) {
 	}
 };
 
@@ -125,20 +125,22 @@ template<> struct selector<syn::DNumber> : Keep {};
 template<> struct selector<syn::FunctionParameterList> : Keep {};
 template<> struct selector<syn::FunctionArgsList> : Keep {};
 
-template<> struct selector<syn::FunctionArgLists> : Keep {};
-template<> struct selector<syn::MemberAccessors> : Keep {};
+// template<> struct selector<syn::FunctionArgLists> : Keep {};
+// template<> struct selector<syn::MemberAccessors> : Keep {};
 template<> struct selector<syn::AddRest> : Keep {};
 template<> struct selector<syn::MultRest> : Keep {};
 template<> struct selector<syn::DivRest> : Keep {};
 template<> struct selector<syn::SubRest> : Keep {};
+template<> struct selector<syn::MemberFunctionChainLinks> : Keep {};
 
 template<> struct selector<syn::AddExpr> : ChainSelector<> {};
 template<> struct selector<syn::SubExpr> : ChainSelector<> {};
 template<> struct selector<syn::DivExpr> : ChainSelector<> {};
 template<> struct selector<syn::MultExpr> : ChainSelector<> {};
-template<> struct selector<syn::MemberAccessChain> : ChainSelector<> {};
-template<> struct selector<syn::FunctionCall> : ChainSelector<> {};
-template<> struct selector<syn::MemberAccessor> : ChainSelector<false> {};
+// template<> struct selector<syn::MemberAccessChain> : ChainSelector<> {};
+// template<> struct selector<syn::FunctionCall> : ChainSelector<> {};
+// template<> struct selector<syn::MemberAccessor> : ChainSelector<false> {};
+template<> struct selector<syn::MemberFunctionChain> : ChainSelector<> {};
 
 template<> struct selector<syn::Seps> : Discard {};
 template<> struct selector<syn::Plus> : Discard {};
