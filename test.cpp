@@ -28,7 +28,7 @@ struct Fold : pegtl::parse_tree::apply<Fold> {
 	}
 };
 
-struct FoldDiscard : pegtl::parse_tree::apply<Fold> {
+struct FoldDiscard : pegtl::parse_tree::apply<FoldDiscard> {
 	template<typename Node, typename... States>
 	static void transform(std::unique_ptr< Node >& n, States&&...) {
 		if(n->children.size() == 1) {
